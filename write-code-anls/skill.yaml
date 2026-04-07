@@ -1,0 +1,11 @@
+name: write-code-anls
+description: 将源代码转换为深入浅出的技术教程，采用《Claude Code完全指南》的技术写作风格
+
+triggers:
+  - 根据源码写教程
+  - 源码分析教程
+  - 代码解析书籍
+  - 技术书籍写作
+  - 深入浅出源码
+
+---
