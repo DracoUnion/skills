@@ -267,10 +267,7 @@ setState: (updater: (prev: T) => T) => {
 
 Redux 使用 middleware 链处理副作用，但 Claude Code 选择了更简单的方案：
 
-| 方案 | 复杂度 | 适用场景 |
-|------|--------|----------|
-| Middleware链 | 高 | 多种副作用类型需要插拔 |
-| 单一onChange回调 | 低 | 副作用类型有限且固定 |
+Middleware链复杂度高，适用于多种副作用类型需要插拔的场景，而单一onChange回调复杂度低，适用于副作用类型有限且固定的场景。
 
 Claude Code 的副作用类型只有（1）写配置文件，（2）通知远端和（3）清缓存。一个 `onChange` 回调足够应对，34行代码不值得引入 middleware 的复杂度。
 ```
