@@ -242,24 +242,30 @@ export type Store<T> = {
 ````
 
 **逐行代码解析**：
-```markdown
+````markdown
 ### 2.2 setState 核心逻辑
 
-\`\`\`typescript
+```typescript
 setState: (updater: (prev: T) => T) => {
-  const prev = state                 // ① 保存旧状态（用于后续比较）
-  const next = updater(prev)         // ② 执行更新函数，计算新状态
-  if (Object.is(next, prev)) return  // ③ 没变？短路退出（性能优化关键）
-  state = next                       // ④ 更新闭包中的状态
-  onChange?.({ newState: next, oldState: prev })  // ⑤ 触发副作用回调
-  for (const listener of listeners) listener()    // ⑥ 通知所有订阅者
+  // ① 保存旧状态（用于后续比较）
+  const prev = state
+  // ② 执行更新函数，计算新状态           
+  const next = updater(prev)
+  // ③ 没变？短路退出（性能优化关键）      
+  if (Object.is(next, prev)) return
+  // ④ 更新闭包中的状态  
+  state = next
+  // ⑤ 触发副作用回调                 
+  onChange?.({ newState: next, oldState: prev })
+  // ⑥ 通知所有订阅者
+  for (const listener of listeners) listener()    
 }
-\`\`\`
+```
 
 **为什么用 Object.is 而不是 ===？**
 
 `Object.is(NaN, NaN)` 返回 true（=== 返回 false），而`Object.is(+0, -0)` 返回 false（=== 返回 true），提供了更精确的状态变化检测。
-```
+````
 
 **设计取舍分析**：
 ```markdown
