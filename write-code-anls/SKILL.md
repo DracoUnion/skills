@@ -221,22 +221,25 @@ graph TD
 ## 示例片段
 
 **类型定义讲解**：
-```markdown
+````markdown
 ### 2.1 类型定义详解
 
 先理解类型，就像先看懂建筑图纸再施工。
 
 #### Store 接口
-\`\`\`typescript
+```typescript
 export type Store<T> = {
-  getState: () => T                              // 读：获取当前状态
-  setState: (updater: (prev: T) => T) => void    // 写：基于旧状态计算新状态
-  subscribe: (listener: Listener) => () => void  // 订阅：状态变更通知
+  // 读：获取当前状态
+  getState: () => T
+  // 写：基于旧状态计算新状态
+  setState: (updater: (prev: T) => T) => void
+  // 订阅：状态变更通知
+  subscribe: (listener: Listener) => () => void  
 }
-\`\`\`
+```
 
 这三个方法构成了状态管理的"最小完备集合"：**getState**授予了读权限，**setState**授予了写权限（函数式更新保证原子性），**subscribe**授予了监听权限（发布-订阅模式）。
-```
+````
 
 **逐行代码解析**：
 ```markdown
