@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
-"""emomem — 跨会话长期记忆命令行工具。
+"""emomem — 跨会话长期记忆命令行工具（完全自包含版）。
 
-基于 Reverie 的 src/memory 模块（MemoryManager），把「记住、召回、修正、
-治理」暴露成直接在终端 / 被 Claude Code skill 调用的子命令。数据默认存放
-在 ~/.emomem（可用 --data-dir 覆盖），与 Reverie 桌面端的 data/memory 隔离。
+本应用是 Reverie `src/memory` 模块的 vendored 副本封装：所有用到的项目类/
+函数都已以源码副本放在本应用自己的 ``src/`` 包内，运行时不 import 任何
+Reverie 仓库代码（也不依赖当前工作目录）。第三方库（numpy/pydantic/
+sqlite-vec/sqlcipher3/python-dotenv 等）照常通过 pip import。
 
-本文件完全自包含：运行时会向上查找包含 src/memory 的仓库根目录并注入
-sys.path，因此不依赖安装或当前工作目录，直接 `python .skill/emomem/bin/emomem.py`
-即可使用。语义检索依赖本机缓存的 sentence-transformers 模型；模型缺失时
-自动降级为词法召回，CLI 依然可用。
+数据默认存放在 ~/.emomem（可用 --data-dir 覆盖）。语义检索依赖本机缓存的
+sentence-transformers 模型；模型缺失时自动降级为词法召回，CLI 依然可用。
 """
 
 from __future__ import annotations
@@ -33,26 +32,30 @@ COGNITIVE_LAYERS = ("semantic", "episodic", "procedural")
 RETENTION_LAYERS = ("permanent", "long_term", "short_term")
 
 
-def _find_repo_root() -> Path:
-    """向上查找包含 ``src/memory`` 的仓库根目录。"""
-    here = Path(__file__).resolve()
-    for parent in here.parents:
-        if (parent / "src" / "memory").is_dir():
-            return parent
-    sys.stderr.write(
-        "错误：找不到包含 src/memory 的 Reverie 仓库目录。\n"
-        "请确认 emomem.py 位于仓库的 .skill/emomem/bin/ 目录下。\n"
-    )
-    raise SystemExit(2)
+def _app_root() -> Path:
+    """本应用根目录 = d:/src/skills/emomem（bin/ 的上一级）。
+
+    不是去找仓库 src/memory，而是固定在 ``__file__`` 的父目录/父目录。
+    """
+    return Path(__file__).resolve().parent.parent
 
 
-REPO_ROOT = _find_repo_root()
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
+APP_ROOT = _app_root()
+if str(APP_ROOT) not in sys.path:
+    sys.path.insert(0, str(APP_ROOT))
 
+# 全部使用应用自己的 vendored 副本（import 面与 Reverie 仓库一致，
+# 但解析到的 src 是本目录下的版本）。
 from src.config.settings import FeatureSettings, MemorySettings  # noqa: E402
+from src.memory import manager as _vendored_manager  # noqa: E402
 from src.memory.manager import MemoryManager  # noqa: E402
 from src.persona.persona_card import Persona, load_persona  # noqa: E402
+
+# 防御性断言：确认 import 到的是应用内副本，而不是任何其他路径上的 src
+#（例如在 D:/src/Reverie 目录下运行时，绝对不可能解析到仓库的 src）。
+assert Path(_vendored_manager.__file__).resolve().is_relative_to(APP_ROOT), (
+    f"emomem 必须使用自带的 src 副本，却解析到了 {_vendored_manager.__file__}"
+)
 
 logger = logging.getLogger("emomem")
 
@@ -94,7 +97,7 @@ def _build_manager(args: argparse.Namespace) -> MemoryManager:
     """延迟构造 MemoryManager：只有执行子命令时才创建数据目录。
 
     必须同时设置 sqlite_path 与 lancedb_path，否则 manager 会把 catalog
-    错放到默认的 data/memory（manager.py:96-102 的路径一致性逻辑）。
+    错放到默认的 ~/.emomem/memory（manager 内部有路径一致性逻辑）。
     """
     data_dir = Path(args.data_dir).expanduser().resolve()
     settings = MemorySettings(
@@ -136,6 +139,11 @@ def _fail(message: str, args: argparse.Namespace, payload: Any = None) -> int:
     return 1
 
 
+def _print_human(text: str) -> int:
+    print(text)
+    return 0
+
+
 # ── 辅助 ───────────────────────────────────────────────────
 
 def _parse_emotions(pairs: list[str]) -> dict[str, float]:
@@ -159,17 +167,12 @@ def _clamp_k(value: int, maximum: int = 50) -> int:
     return max(1, min(int(value), maximum))
 
 
-def _resolve(path: str | None) -> str | None:
-    if not path:
-        return None
-    return str(Path(path).expanduser().resolve())
-
-
 # ── 子命令处理函数 ─────────────────────────────────────────
 
 def _cmd_info(args, manager: MemoryManager) -> int:
     payload = {
         "data_dir": str(Path(args.data_dir).expanduser().resolve()),
+        "app_root": str(APP_ROOT),
         "total_memories": manager.store.catalog.count(include_expired=True),
         "permanent": manager.store.catalog.count("permanent"),
         "long_term": manager.store.catalog.count("long_term"),
@@ -183,14 +186,13 @@ def _cmd_info(args, manager: MemoryManager) -> int:
     }
     human = (
         f"数据目录   : {payload['data_dir']}\n"
+        f"应用根目录 : {payload['app_root']}\n"
         f"记忆总数   : {payload['total_memories']} "
         f"(permanent {payload['permanent']} / long_term {payload['long_term']} "
         f"/ short_term {payload['short_term']})\n"
         f"向量后端   : {payload['vector_backend']}\n"
         f"嵌入模型   : {payload['settings'].get('embedding_model')} "
-        f"[{payload['settings'].get('embedding_backend')}]\n"
-        f"身份       : {manager.persona.name} "
-        f"({payload['persona']['persona_id']})"
+        f"[{payload['settings'].get('embedding_backend')}]"
     )
     return _emit(args, payload, human)
 
@@ -298,12 +300,8 @@ def _cmd_list(args, manager: MemoryManager) -> int:
     }
     if args.json:
         return _emit(args, payload)
-    if args.layer:
-        title = f"{args.layer} 层"
-    else:
-        title = "全部"
-    header = f"记忆列表（{title}，共 {page.get('total_records')} 条）"
-    lines = [header]
+    title = f"{args.layer} 层" if args.layer else "全部"
+    lines = [f"记忆列表（{title}，共 {page.get('total_records')} 条）"]
     for row in items:
         pinned = "📌" if row.get("pinned") else "·"
         lines.append(
@@ -446,9 +444,8 @@ def _cmd_delete(args, manager: MemoryManager) -> int:
         return _fail(f"删除未生效：{args.id}", args, payload)
     human = (
         f"已删除记忆 {args.id}"
-        + f"（连同 {result.get('purged_revisions', 1) - 1} 条旧修订）"
-        if result.get("purged_revisions", 1) > 1
-        else f"已删除记忆 {args.id}"
+        + (f"（连同 {result.get('purged_revisions', 1) - 1} 条旧修订）"
+           if result.get("purged_revisions", 1) > 1 else "")
     )
     return _emit(args, payload, human)
 
@@ -495,11 +492,6 @@ async def _cmd_maintenance(args, manager: MemoryManager) -> int:
     return _emit(args, result)
 
 
-def _print_human(text: str) -> int:
-    print(text)
-    return 0
-
-
 # ── argparse ───────────────────────────────────────────────
 
 def _add_common(parser: argparse.ArgumentParser, *, suppress: bool = False) -> None:
@@ -507,23 +499,17 @@ def _add_common(parser: argparse.ArgumentParser, *, suppress: bool = False) -> N
 
     ``suppress=True`` 用于挂到每个子命令的 parents 上：argparse 会对它自己
     定义过的选项重新套用默认值，若无 SUPPRESS 会把主 parser 里已经解析好的
-    ``--data-dir`` 覆盖回默认值。子命令侧这些选项一律用 SUPPRESS，保持
-    主 parser 是唯一默认值来源。
+    ``--data-dir`` 覆盖回默认值（子命令侧的四个全局选项一律 SUPPRESS）。
     """
-    def _default(value: str | None, store_true: bool = False):
-        if suppress:
-            return argparse.SUPPRESS
-        return value
-
     parser.add_argument(
         "--data-dir",
-        default=_default(DEFAULT_DATA_DIR),
+        default=argparse.SUPPRESS if suppress else DEFAULT_DATA_DIR,
         metavar="DIR",
         help="记忆数据目录（默认 ~/.emomem，SQLite 位于其 metadata.db）",
     )
     parser.add_argument(
         "--persona-file",
-        default=_default(None),
+        default=argparse.SUPPRESS if suppress else None,
         metavar="PATH",
         help="可选的 Persona JSON 卡；缺省使用中性 EmoMem 身份",
     )
@@ -544,7 +530,7 @@ def _add_common(parser: argparse.ArgumentParser, *, suppress: bool = False) -> N
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="emomem",
-        description="跨会话长期记忆工具：记住并召回用户的个人信息、偏好、事件与目标。",
+        description="跨会话长期记忆工具：记住并召回用户的个人信息、偏好、事件与目标（自包含版）。",
     )
     _add_common(parser)
 
@@ -599,9 +585,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_interaction.add_argument("assistant_reply", nargs="?", default="", help="助手回复")
     p_interaction.add_argument("--emotion-intensity", type=float, default=0.0)
     p_interaction.add_argument("--emotion", action="append", default=[], metavar="NAME=SCORE")
-    p_interaction.set_defaults(
-        handler=_cmd_store_interaction, async_cmd=True,
-    )
+    p_interaction.set_defaults(handler=_cmd_store_interaction, async_cmd=True)
 
     # 召回
     p_search = sub.add_parser(
@@ -659,8 +643,7 @@ def build_parser() -> argparse.ArgumentParser:
     # 治理
     for name, label in (("weaken", "降低"), ("strengthen", "提升"), ("reactivate", "重新激活")):
         p = sub.add_parser(
-            f"{name}", parents=[common],
-            help=f"{label}记忆的重要性",
+            name, parents=[common], help=f"{label}记忆的重要性",
         )
         p.add_argument("id", help="记忆 id")
         p.add_argument("--amount", type=float, default=0.1 if name != "reactivate" else 0.15)
@@ -743,7 +726,7 @@ def _run(args: argparse.Namespace) -> int:
     manager = _build_manager(args)
     handler: Callable = args.handler
     if getattr(args, "async_cmd", False):
-        # 独立进程，Windows 上 Python 3.12 使用 ProactorEventLoop 即可。
+        # 独立进程，Python 3.10+ 默认事件循环即可。
         return asyncio.run(handler(args, manager))
     return handler(args, manager)
 
